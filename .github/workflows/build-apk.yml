@@ -1,0 +1,74 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch to build"
+        required: true
+        default: "MADADAR-patch-1"
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha }}
+
+      - name: Locate and extract uploaded project archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(find . -maxdepth 3 -type f -iname '*.zip' | head -n 1)"
+          if [ -z "$archive" ]; then
+            echo "::error::No project ZIP found in this branch."
+            exit 1
+          fi
+          mkdir -p extracted
+          unzip -q "$archive" -d extracted
+          project_dir="$(find extracted -name settings.gradle -o -name settings.gradle.kts | head -n 1 | xargs -r dirname)"
+          if [ -z "$project_dir" ]; then
+            echo "::error::The ZIP does not contain a Gradle Android project (settings.gradle[.kts] missing)."
+            find extracted -maxdepth 4 -type f | head -n 100
+            exit 1
+          fi
+          echo "PROJECT_DIR=$project_dir" >> "$GITHUB_ENV"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon assembleDebug
+          else
+            gradle --no-daemon assembleDebug
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: OfflineAudioStudio-debug-apk
+          path: "**/build/outputs/apk/debug/*.apk"
+          if-no-files-found: error
+          retention-days: 14
