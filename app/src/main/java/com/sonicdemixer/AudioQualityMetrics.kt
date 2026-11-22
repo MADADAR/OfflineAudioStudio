@@ -33,7 +33,7 @@ object AudioQualityMetrics {
                 val magnitude = abs(sample)
                 if (magnitude > peak) peak = magnitude
                 if (magnitude >= clipThreshold) clipped++
-                sumSquares += sample.toDouble() * sample
+                sumSquares += sample.toDouble() * sample.toDouble()
             }
         }
         val valid = signal.size - bad
