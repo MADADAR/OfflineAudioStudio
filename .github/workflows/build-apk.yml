@@ -9,6 +9,8 @@ on:
         default: "MADADAR-patch-1"
   pull_request:
     types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -20,7 +22,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha }}
+          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.sha }}
 
       - name: Locate and extract uploaded project archive
         shell: bash
