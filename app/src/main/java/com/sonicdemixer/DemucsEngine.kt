@@ -65,40 +65,52 @@ class DemucsEngine(private val context: Context) {
             require(audio.rate == 44100) { "تعذر تجهيز الصوت بتردد 44100 هرتز" }
             require(isModelReady()) { "نزّل نموذج الفصل أولًا" }
             val opts = OrtSession.SessionOptions().apply {
-                setIntraOpNumThreads(maxOf(2, Runtime.getRuntime().availableProcessors() / 2))
+                // Keep CPU contention and peak memory lower on mid-range Android phones.
+                setIntraOpNumThreads(2)
                 setInterOpNumThreads(1)
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
             }
             env.createSession(modelFile().absolutePath, opts).use { session ->
                 val inputName = session.inputNames.first()
                 val outputName = session.outputNames.first()
-                val stems = Array(4) { Array(2) { FloatArray(audio.left.size) } }
-                var offset = 0
-                while (offset < audio.left.size) {
-                    if (cancelled) throw IOException("تم إلغاء الفصل")
-                    val n = min(SEGMENT, audio.left.size - offset)
-                    val planar = FloatArray(2 * SEGMENT)
-                    System.arraycopy(audio.left, offset, planar, 0, n)
-                    System.arraycopy(audio.right, offset, planar, SEGMENT, n)
-                    OnnxTensor.createTensor(env, FloatBuffer.wrap(planar), longArrayOf(1, 2, SEGMENT.toLong())).use { tensor ->
-                        session.run(mapOf(inputName to tensor)).use { result ->
-                            val output = result[outputName] as OnnxTensor
-                            val values = output.floatBuffer
-                            for (s in 0..3) for (ch in 0..1) {
-                                val base = (s * 2 + ch) * SEGMENT
-                                for (i in 0 until n) stems[s][ch][offset + i] = values.get(base + i)
+                val folder = File(context.getExternalFilesDir(null), "SonicDemixer").apply { mkdirs() }
+                val stamp = System.currentTimeMillis()
+                val files = STEMS.map { stem -> File(folder, "${stem.lowercase()}_$stamp.wav") }
+                val outputs = Array(4) { index ->
+                    DataOutputStream(BufferedOutputStream(FileOutputStream(files[index]))).apply {
+                        writeWavHeader(this, audio.left.size, audio.rate)
+                    }
+                }
+                try {
+                    var offset = 0
+                    while (offset < audio.left.size) {
+                        if (cancelled) throw IOException("تم إلغاء الفصل")
+                        val n = min(SEGMENT, audio.left.size - offset)
+                        val planar = FloatArray(2 * SEGMENT)
+                        System.arraycopy(audio.left, offset, planar, 0, n)
+                        System.arraycopy(audio.right, offset, planar, SEGMENT, n)
+                        OnnxTensor.createTensor(env, FloatBuffer.wrap(planar), longArrayOf(1, 2, SEGMENT.toLong())).use { tensor ->
+                            session.run(mapOf(inputName to tensor)).use { result ->
+                                val output = result[outputName] as OnnxTensor
+                                val values = output.floatBuffer
+                                for (s in 0..3) {
+                                    val leftBase = (s * 2) * SEGMENT
+                                    val rightBase = (s * 2 + 1) * SEGMENT
+                                    val out = outputs[s]
+                                    for (i in 0 until n) {
+                                        out.writeShortLE((values.get(leftBase + i).coerceIn(-1f, 1f) * 32767f).toInt())
+                                        out.writeShortLE((values.get(rightBase + i).coerceIn(-1f, 1f) * 32767f).toInt())
+                                    }
+                                }
                             }
                         }
+                        offset += n
+                        progress((offset * 100 / audio.left.size).coerceIn(0, 100))
                     }
-                    offset += n
-                    progress((offset * 100 / audio.left.size).coerceIn(0, 100))
+                } finally {
+                    outputs.forEach { try { it.close() } catch (_: Exception) {} }
                 }
-                val folder = File(context.getExternalFilesDir(null), "SonicDemixer").apply { mkdirs() }
-                return stems.mapIndexed { index, pair ->
-                    val file = File(folder, "${STEMS[index].lowercase()}_${System.currentTimeMillis()}.wav")
-                    writeStereoWav(file, pair[0], pair[1], audio.rate)
-                    file
-                }
+                return files
             }
         } finally { input.delete() }
     }
@@ -235,6 +247,24 @@ class DemucsEngine(private val context: Context) {
         raf.seek(dataAt)
         for (i in 0 until count) { l[i] = raf.i16() / 32768f; r[i] = raf.i16() / 32768f }
         Audio(rate, l, r)
+    }
+
+    private fun DataOutputStream.writeShortLE(value: Int) {
+        writeByte(value and 255)
+        writeByte((value ushr 8) and 255)
+    }
+
+    private fun writeWavHeader(out: DataOutputStream, frames: Int, rate: Int) {
+        val dataBytes = frames.toLong() * 4L
+        require(dataBytes <= 0x7fffffffL - 36L) { "الملف طويل جدًا لصيغة WAV التقليدية" }
+        fun le16(v: Int) { out.writeByte(v and 255); out.writeByte((v ushr 8) and 255) }
+        fun le32(v: Long) {
+            le16((v and 65535L).toInt())
+            le16(((v ushr 16) and 65535L).toInt())
+        }
+        out.writeBytes("RIFF"); le32(36L + dataBytes); out.writeBytes("WAVEfmt ")
+        le32(16); le16(1); le16(2); le32(rate.toLong()); le32(rate.toLong() * 4L)
+        le16(4); le16(16); out.writeBytes("data"); le32(dataBytes)
     }
 
     private fun writeStereoWav(file: File, left: FloatArray, right: FloatArray, rate: Int) {
