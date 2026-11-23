@@ -47,7 +47,7 @@ class MainActivity : Activity() {
         }
         root.addView(progress, LinearLayout.LayoutParams(-1, 12))
         download = Button(this).apply { text = "تنزيل نموذج الذكاء الاصطناعي" }
-        choose = Button(this).apply { text = "اختيار ملف WAV" }
+        choose = Button(this).apply { text = "اختيار ملف صوتي (MP3 أو WAV)" }
         separate = Button(this).apply { text = "ابدأ فصل المسارات"; isEnabled = engine.isModelReady() }
         root.addView(download, LinearLayout.LayoutParams(-1, -2))
         root.addView(choose, LinearLayout.LayoutParams(-1, -2))
@@ -58,7 +58,7 @@ class MainActivity : Activity() {
         download.setOnClickListener { downloadModel() }
         choose.setOnClickListener {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE); type = "audio/wav"
+                addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*"
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             startActivityForResult(intent, 41)
@@ -89,7 +89,7 @@ class MainActivity : Activity() {
 
     private fun runSeparation() {
         val uri = selected
-        if (uri == null) { status.text = "اختر ملف WAV أولًا"; return }
+        if (uri == null) { status.text = "اختر ملف MP3 أو WAV أولًا"; return }
         if (!engine.isModelReady()) { status.text = "نزّل النموذج أولًا"; return }
         setBusy(true); progress.progress = 0; status.text = "جارٍ تجهيز الصوت..."
         executor.execute {
