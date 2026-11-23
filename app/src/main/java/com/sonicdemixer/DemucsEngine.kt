@@ -2,6 +2,10 @@ package com.sonicdemixer
 
 import android.content.Context
 import android.net.Uri
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import java.nio.ByteOrder
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -56,8 +60,8 @@ class DemucsEngine(private val context: Context) {
             input.outputStream().use { stream.copyTo(it) }
         }
         try {
-            val audio = readWav(input)
-            require(audio.rate == 44100) { "يلزم WAV بتردد 44100 هرتز" }
+            val audio = if (isWav(input)) readWav(input) else decodeCompressedAudio(uri)
+            require(audio.rate == 44100) { "تعذر تجهيز الصوت بتردد 44100 هرتز" }
             require(isModelReady()) { "نزّل نموذج الفصل أولًا" }
             val opts = OrtSession.SessionOptions().apply {
                 setIntraOpNumThreads(maxOf(2, Runtime.getRuntime().availableProcessors() / 2))
@@ -96,6 +100,113 @@ class DemucsEngine(private val context: Context) {
                 }
             }
         } finally { input.delete() }
+    }
+
+
+    private fun isWav(file: File): Boolean = RandomAccessFile(file, "r").use { raf ->
+        if (raf.length() < 12) false else {
+            val h = ByteArray(4); raf.readFully(h); val riff = String(h)
+            raf.seek(8); raf.readFully(h); riff == "RIFF" && String(h) == "WAVE"
+        }
+    }
+
+    /** Decode MP3 (and other Android-supported audio formats) locally using Android's media codec. */
+    private fun decodeCompressedAudio(uri: Uri): Audio {
+        val extractor = MediaExtractor()
+        var codec: MediaCodec? = null
+        try {
+            extractor.setDataSource(context, uri, null)
+            var track = -1
+            for (i in 0 until extractor.trackCount) {
+                val f = extractor.getTrackFormat(i)
+                if (f.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) { track = i; break }
+            }
+            require(track >= 0) { "لم يتم العثور على مسار صوتي داخل الملف" }
+            extractor.selectTrack(track)
+            val inputFormat = extractor.getTrackFormat(track)
+            val mime = inputFormat.getString(MediaFormat.KEY_MIME) ?: error("تنسيق صوت غير معروف")
+            codec = MediaCodec.createDecoderByType(mime)
+            codec.configure(inputFormat, null, null, 0)
+            codec.start()
+            val info = MediaCodec.BufferInfo()
+            val pcm = java.io.ByteArrayOutputStream()
+            var inputDone = false
+            var outputDone = false
+            var sampleRate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            var channels = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            var pcmEncoding = android.media.AudioFormat.ENCODING_PCM_16BIT
+            while (!outputDone) {
+                if (!inputDone) {
+                    val index = codec.dequeueInputBuffer(10000)
+                    if (index >= 0) {
+                        val buffer = codec.getInputBuffer(index)!!
+                        val size = extractor.readSampleData(buffer, 0)
+                        if (size < 0) {
+                            codec.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            codec.queueInputBuffer(index, 0, size, extractor.sampleTime, 0)
+                            extractor.advance()
+                        }
+                    }
+                }
+                when (val out = codec.dequeueOutputBuffer(info, 10000)) {
+                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        val fmt = codec.outputFormat
+                        sampleRate = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        channels = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                        if (fmt.containsKey(MediaFormat.KEY_PCM_ENCODING))
+                            pcmEncoding = fmt.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                    }
+                    MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
+                    else -> if (out >= 0) {
+                        codec.getOutputBuffer(out)?.let { buffer ->
+                            if (info.size > 0) {
+                                buffer.position(info.offset); buffer.limit(info.offset + info.size)
+                                val bytes = ByteArray(info.size); buffer.get(bytes); pcm.write(bytes)
+                            }
+                        }
+                        if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true
+                        codec.releaseOutputBuffer(out, false)
+                    }
+                }
+            }
+            val raw = pcm.toByteArray()
+            require(raw.isNotEmpty()) { "لم ينتج مفكك الصوت أي بيانات" }
+            require(channels in 1..8 && sampleRate > 0) { "خصائص الصوت غير مدعومة" }
+            val bytesPerSample = if (pcmEncoding == android.media.AudioFormat.ENCODING_PCM_FLOAT) 4 else 2
+            val frameBytes = channels * bytesPerSample
+            val frames = raw.size / frameBytes
+            require(frames > 0) { "ملف الصوت فارغ" }
+            val source = Array(2) { FloatArray(frames) }
+            val bb = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN)
+            for (i in 0 until frames) {
+                var left = 0f; var right = 0f
+                for (ch in 0 until channels) {
+                    val v = if (bytesPerSample == 4) bb.float else bb.short / 32768f
+                    if (ch == 0) left += v else if (ch == 1) right += v
+                    else { left += v * 0.5f; right += v * 0.5f }
+                }
+                if (channels == 1) right = left
+                source[0][i] = (left / if (channels > 2) (1f + (channels - 2) * 0.5f) else 1f).coerceIn(-1f, 1f)
+                source[1][i] = (right / if (channels > 2) (1f + (channels - 2) * 0.5f) else 1f).coerceIn(-1f, 1f)
+            }
+            if (sampleRate == 44100) return Audio(44100, source[0], source[1])
+            val outCount = (frames.toLong() * 44100L / sampleRate).toInt()
+            val l = FloatArray(outCount); val r = FloatArray(outCount)
+            for (i in 0 until outCount) {
+                val pos = i.toDouble() * sampleRate / 44100.0
+                val a = pos.toInt().coerceIn(0, frames - 1); val b = (a + 1).coerceAtMost(frames - 1)
+                val t = (pos - a).toFloat()
+                l[i] = source[0][a] * (1f - t) + source[0][b] * t
+                r[i] = source[1][a] * (1f - t) + source[1][b] * t
+            }
+            return Audio(44100, l, r)
+        } finally {
+            try { codec?.stop() } catch (_: Exception) {}
+            try { codec?.release() } catch (_: Exception) {}
+            extractor.release()
+        }
     }
 
     private data class Audio(val rate: Int, val left: FloatArray, val right: FloatArray)
