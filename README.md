@@ -1,6 +1,9 @@
 # SonicDemixer
-Offline-first Android audio studio scaffold built with Kotlin, Jetpack Compose, JNI and CMake.
 
-The Android APK build workflow runs on pushes to `main` and can be run manually from GitHub Actions. It uploads the debug APK as a workflow artifact.
+Android app scaffold for offline audio stem separation, using Kotlin and ONNX Runtime on Android.
 
-Current milestone is a build scaffold; advanced audio processing and stem separation are not yet implemented.
+- Select WAV PCM 16-bit stereo audio (currently requires 44.1 kHz).
+- HT-Demucs ONNX model is downloaded once, then inference is intended to run locally.
+- The debug APK build workflow runs on pushes to `main` and uploads the APK as a workflow artifact.
+
+**Status:** source code and CI build are present, but runtime model compatibility and separation quality have not yet been verified on a device.
