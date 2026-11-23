@@ -52,7 +52,7 @@ class MainActivity : Activity() {
         root.addView(download, LinearLayout.LayoutParams(-1, -2))
         root.addView(choose, LinearLayout.LayoutParams(-1, -2))
         root.addView(separate, LinearLayout.LayoutParams(-1, -2))
-        root.addView(label("يدعم حاليًا WAV PCM 16-bit، ستيريو، 44100 Hz.\nتُحفظ النتائج في ملفات التطبيق: Android/data/com.sonicdemixer/files/SonicDemixer", 12f, Color.LTGRAY))
+        root.addView(label("يدعم MP3 وWAV تلقائيًا؛ يتم تجهيز MP3 داخليًا قبل الفصل.\nتُحفظ النتائج في ملفات التطبيق: Android/data/com.sonicdemixer/files/SonicDemixer", 12f, Color.LTGRAY))
         setContentView(ScrollView(this).apply { addView(root) })
 
         download.setOnClickListener { downloadModel() }
