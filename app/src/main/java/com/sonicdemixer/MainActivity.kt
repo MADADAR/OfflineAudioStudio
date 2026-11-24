@@ -115,7 +115,7 @@ class MainActivity : Activity() {
                         Text(file.nameWithoutExtension.replaceFirstChar{it.uppercase()},color=ComposeColor.White,fontWeight=FontWeight.Bold)
                         Row(horizontalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.fillMaxWidth().padding(top=10.dp)) {
                             OutlinedButton(onClick={onPlay(file)},modifier=Modifier.weight(1f)){Text("▶ تشغيل")}
-                            Button(onClick={onExport(file),modifier=Modifier.weight(1f),colors=ButtonDefaults.buttonColors(containerColor=purple)){Text("حفظ WAV")}
+                            Button(onClick={onExport(file)},modifier=Modifier.weight(1f),colors=ButtonDefaults.buttonColors(containerColor=purple)){Text("حفظ WAV")}
                         }
                     }
                 }
