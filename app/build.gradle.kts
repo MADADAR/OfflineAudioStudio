@@ -21,22 +21,29 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    val releaseStorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+    val releaseStorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+    val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+    val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+    val hasReleaseSigning = listOf(
+        releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword
+    ).all { !it.isNullOrBlank() }
+
     signingConfigs {
-        create("release") {
-            val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
-                ?: throw GradleException("ANDROID_KEYSTORE_PATH is required for release builds")
-            storeFile = file(keystorePath)
-            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                ?: throw GradleException("ANDROID_KEYSTORE_PASSWORD is required")
-            keyAlias = System.getenv("ANDROID_KEY_ALIAS")
-                ?: throw GradleException("ANDROID_KEY_ALIAS is required")
-            keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
-                ?: throw GradleException("ANDROID_KEY_PASSWORD is required")
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStorePath!!)
+                storePassword = releaseStorePassword!!
+                keyAlias = releaseKeyAlias!!
+                keyPassword = releaseKeyPassword!!
+            }
         }
     }
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
         }
     }
