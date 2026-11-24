@@ -21,6 +21,25 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+                ?: throw GradleException("ANDROID_KEYSTORE_PATH is required for release builds")
+            storeFile = file(keystorePath)
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                ?: throw GradleException("ANDROID_KEYSTORE_PASSWORD is required")
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                ?: throw GradleException("ANDROID_KEY_ALIAS is required")
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+                ?: throw GradleException("ANDROID_KEY_PASSWORD is required")
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+        }
+    }
     buildFeatures { compose = true }
 }
 
