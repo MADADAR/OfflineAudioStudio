@@ -1,127 +1,181 @@
 package com.sonicdemixer
 
-import androidx.activity.ComponentActivity
-import android.content.Intent
+import android.media.audiofx.Equalizer
+import android.media.audiofx.BassBoost
+import android.media.audiofx.Virtualizer
 import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.media.MediaPlayer
-import android.graphics.Color
-import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color as ComposeColor
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
-import java.io.File
-import java.util.concurrent.Executors
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import kotlinx.coroutines.delay
+import kotlin.math.roundToLong
 
 class MainActivity : ComponentActivity() {
-    private val executor = Executors.newSingleThreadExecutor()
-    private val main = Handler(Looper.getMainLooper())
-    private lateinit var engine: DemucsEngine
-    private var player: MediaPlayer? = null
-    private var pendingExport: File? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        engine = DemucsEngine(this)
-        setContent { SonicDemixerUi(
-            modelReady = engine.isModelReady(),
-            onDownload = { progress ->
-                executor.execute { try {
-                    engine.downloadModel { p -> main.post { progress(p) } }
-                    main.post { progress(100) }
-                } catch(e: Exception) { main.post { progress(-1) } } }
-            },
-            onSeparate = { uri, callback ->
-                executor.execute { try {
-                    val result=engine.separateWav(uri) { p -> main.post { callback(p,null) } }
-                    main.post { callback(100,result) }
-                } catch(e: Exception) { main.post { callback(-1,null) } } }
-            },
-            onPlay = { file -> stopPlayback(); try {
-                player=MediaPlayer().apply { setDataSource(file.absolutePath); setOnCompletionListener { stopPlayback() }; prepare(); start() }
-            } catch(_:Exception) { Toast.makeText(this,"تعذر تشغيل الملف",Toast.LENGTH_SHORT).show() } },
-            onExport = { file -> pendingExport=file; exportLauncher.launch(file.name) }
-        ) }
+        setContent { SonicDemixer() }
     }
-    private val exportLauncher=registerForActivityResult(ActivityResultContracts.CreateDocument("audio/wav")) { uri ->
-        val file=pendingExport; pendingExport=null
-        if(uri!=null && file!=null) executor.execute {
-            try { contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } } }
-            catch(_:Exception) { main.post { Toast.makeText(this,"فشل الحفظ",Toast.LENGTH_SHORT).show() } }
-        }
-    }
-    private fun stopPlayback(){ try{player?.stop()}catch(_:Exception){}; try{player?.release()}catch(_:Exception){}; player=null }
-    override fun onDestroy(){ stopPlayback(); executor.shutdownNow(); super.onDestroy() }
 }
 
-@Composable private fun SonicDemixerUi(
-    modelReady:Boolean,
-    onDownload:( (Int)->Unit)->Unit,
-    onSeparate:(Uri,(Int,List<File>?)->Unit)->Unit,
-    onPlay:(File)->Unit,
-    onExport:(File)->Unit
-) {
-    val context= LocalContext.current
-    var modelIsReady by remember { mutableStateOf(modelReady) }
-    val purple=ComposeColor(0xFF7C5CFF); val bg=ComposeColor(0xFF0B0D12); val surface=ComposeColor(0xFF141821)
-    var selected by remember { mutableStateOf<Uri?>(null) }
-    var fileName by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var progress by remember { mutableIntStateOf(0) }
-    var status by remember { mutableStateOf(if(modelReady) "النموذج جاهز" else "يلزم تنزيل النموذج مرة واحدة") }
-    var results by remember { mutableStateOf<List<File>>(emptyList()) }
-    val pick=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        selected=uri; fileName=uri?.lastPathSegment?.substringAfterLast('/') ?: ""
-        status=if(uri!=null) "تم اختيار الملف" else "لم يتم اختيار ملف"
-    }
-    Column(Modifier.fillMaxSize().background(bg).verticalScroll(rememberScrollState()).padding(20.dp), horizontalAlignment=Alignment.CenterHorizontally) {
-        Spacer(Modifier.height(14.dp))
-        Text("SonicDemixer",fontSize=30.sp,fontWeight=FontWeight.Bold,color=ComposeColor.White)
-        Text("فصل صوتي بالذكاء الاصطناعي",color=ComposeColor(0xFFAAB3C4),fontSize=15.sp)
-        Spacer(Modifier.height(22.dp))
-        Card(colors=CardDefaults.cardColors(containerColor=surface),shape=RoundedCornerShape(20.dp),modifier=Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(18.dp)) {
-                Text("المعالجة المحلية",color=ComposeColor(0xFF45D6B5),fontWeight=FontWeight.Bold)
-                Spacer(Modifier.height(6.dp)); Text(status,color=ComposeColor.White)
-                if(progress>0) { Spacer(Modifier.height(12.dp)); LinearProgressIndicator(progress={progress.coerceAtMost(100)/100f},color=purple,modifier=Modifier.fillMaxWidth()); Text("$progress%",color=ComposeColor.White) }
+@Composable
+private fun SonicDemixer() {
+    val context = LocalContext.current
+    val player = remember { ExoPlayer.Builder(context).build() }
+    var uri by remember { mutableStateOf<Uri?>(null) }
+    var fileName by remember { mutableStateOf("لم يتم اختيار ملف") }
+    var duration by remember { mutableStateOf(0L) }
+    var position by remember { mutableStateOf(0L) }
+    var playing by remember { mutableStateOf(false) }
+    var speed by remember { mutableStateOf(1f) }
+    var eqOn by remember { mutableStateOf(false) }
+    var bands by remember { mutableStateOf(List(5) { 0f }) }
+    var bass by remember { mutableStateOf(0f) }
+    var stereo by remember { mutableStateOf(0f) }
+    var eq by remember { mutableStateOf<Equalizer?>(null) }
+    var bassFx by remember { mutableStateOf<BassBoost?>(null) }
+    var stereoFx by remember { mutableStateOf<Virtualizer?>(null) }
+    var trimStart by remember { mutableStateOf(0L) }
+    var trimEnd by remember { mutableStateOf(0L) }
+    var trimPreview by remember { mutableStateOf(false) }
+    var seek by remember { mutableStateOf<Float?>(null) }
+
+    fun applyEffects() {
+        try {
+            eq?.release(); bassFx?.release(); stereoFx?.release()
+            eq = Equalizer(0, player.audioSessionId).apply { enabled = eqOn }
+            bassFx = BassBoost(0, player.audioSessionId).apply { enabled = true; setStrength((bass*1000).toInt().toShort()) }
+            stereoFx = Virtualizer(0, player.audioSessionId).apply { enabled = true; setStrength((stereo*1000).toInt().toShort()) }
+            eq?.let { e ->
+                val count = e.numberOfBands.toInt()
+                for (i in 0 until minOf(5,count)) {
+                    val range = e.bandLevelRange
+                    val level = (bands[i]*100).toInt().coerceIn(range[0].toInt(),range[1].toInt())
+                    try { e.setBandLevel(i.toShort(), level.toShort()) } catch (_: Exception) {}
+                }
             }
+        } catch (_: Exception) { eq=null; bassFx=null; stereoFx=null }
+    }
+
+    DisposableEffect(player) { onDispose { eq?.release(); bassFx?.release(); stereoFx?.release(); player.release() } }
+    LaunchedEffect(player) {
+        while (true) {
+            position = player.currentPosition.coerceAtLeast(0)
+            duration = player.duration.coerceAtLeast(0)
+            playing = player.isPlaying
+            if (trimPreview && trimEnd>trimStart && playing && position>=trimEnd) {
+                player.pause(); player.seekTo(trimStart)
+            }
+            delay(250)
         }
-        Spacer(Modifier.height(16.dp))
-        Button(onClick={ if(!busy){busy=true;progress=0;onDownload { p-> progress=p; if(p<0){status="تعذر تنزيل النموذج";busy=false}else if(p==100){modelIsReady=true;status="النموذج جاهز للعمل محليًا";busy=false} } } },enabled=!busy&&!modelIsReady,modifier=Modifier.fillMaxWidth().height(54.dp),colors=ButtonDefaults.buttonColors(containerColor=purple)) { Text(if(modelIsReady)"النموذج مثبت" else "تنزيل نموذج الذكاء الاصطناعي") }
-        Spacer(Modifier.height(10.dp))
-        OutlinedButton(onClick={pick.launch(arrayOf("audio/*"))},enabled=!busy,modifier=Modifier.fillMaxWidth().height(54.dp)) { Text("اختيار ملف صوتي") }
-        if(fileName.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text(fileName,color=ComposeColor(0xFFAAB3C4)) }
-        Spacer(Modifier.height(14.dp))
-        Button(onClick={ val u=selected; if(u==null) status="اختر ملفًا صوتيًا أولًا" else if(!modelIsReady) status="نزّل النموذج أولًا" else {busy=true;progress=0;status="جار فصل الصوت...";onSeparate(u){p,files-> if(p<0){status="تعذر الفصل";busy=false}else if(files!=null){results=files;status="اكتمل الفصل";busy=false}else progress=p}} },enabled=!busy&&modelIsReady&&selected!=null,modifier=Modifier.fillMaxWidth().height(58.dp),colors=ButtonDefaults.buttonColors(containerColor=ComposeColor(0xFF45D6B5),contentColor=bg)) { Text("فصل المسارات الصوتية",fontWeight=FontWeight.Bold) }
-        Spacer(Modifier.height(24.dp))
-        if(results.isNotEmpty()) {
-            Text("المسارات الناتجة",color=ComposeColor.White,fontSize=20.sp,fontWeight=FontWeight.Bold)
-            results.forEach { file ->
-                Card(colors=CardDefaults.cardColors(containerColor=surface),modifier=Modifier.fillMaxWidth().padding(vertical=6.dp),shape=RoundedCornerShape(16.dp)) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text(file.nameWithoutExtension.replaceFirstChar{it.uppercase()},color=ComposeColor.White,fontWeight=FontWeight.Bold)
-                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.fillMaxWidth().padding(top=10.dp)) {
-                            OutlinedButton(onClick={onPlay(file)},modifier=Modifier.weight(1f)){Text("▶ تشغيل")}
-                            Button(onClick={onExport(file)},modifier=Modifier.weight(1f),colors=ButtonDefaults.buttonColors(containerColor=purple)){Text("حفظ WAV")}
+    }
+    LaunchedEffect(speed) { player.setPlaybackSpeed(speed) }
+
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { selected ->
+        selected?.let {
+            uri=it
+            try { context.contentResolver.takePersistableUriPermission(it,android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
+            fileName=it.lastPathSegment?.substringAfterLast('/') ?: "ملف صوتي"
+            player.setMediaItem(MediaItem.fromUri(it)); player.prepare(); player.playWhenReady=false
+            trimStart=0L; trimEnd=0L; trimPreview=false
+            applyEffects()
+        }
+    }
+
+    MaterialTheme {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            Scaffold { padding ->
+                LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp), horizontalAlignment=Alignment.CenterHorizontally) {
+                    item {
+                        Text("SonicDemixer",style=MaterialTheme.typography.headlineLarge,fontWeight=FontWeight.Bold)
+                        Text("استوديو الصوت المحلي",style=MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(16.dp))
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp),horizontalAlignment=Alignment.CenterHorizontally) {
+                                Text("المشغل",style=MaterialTheme.typography.titleLarge)
+                                Text(fileName,textAlign=TextAlign.Center)
+                                Button(onClick={pick.launch(arrayOf("audio/*"))}) { Text("اختيار ملف صوتي") }
+                                if (uri!=null) {
+                                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick={if(player.isPlaying) player.pause() else player.play()}) { Text(if(playing) "إيقاف مؤقت" else "تشغيل") }
+                                        OutlinedButton(onClick={player.pause();player.seekTo(0)}) { Text("إعادة") }
+                                    }
+                                    Text("${time(position)} / ${time(duration)}")
+                                    Slider(value=seek ?: if(duration>0) position.toFloat()/duration else 0f, onValueChange={seek=it}, onValueChangeFinished={seek?.let{player.seekTo((it*duration).roundToLong())};seek=null}, enabled=duration>0)
+                                    Text("سرعة التشغيل: ${"%.1f".format(speed)}x")
+                                    Slider(value=speed,onValueChange={speed=it},valueRange=.5f..2f,steps=5)
+                                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(onClick={player.seekTo((position-10000).coerceAtLeast(0))}) { Text("-10 ث") }
+                                        OutlinedButton(onClick={player.seekTo((position+10000).coerceAtMost(duration))}) { Text("+10 ث") }
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text("المؤثرات",style=MaterialTheme.typography.titleLarge)
+                                Row(verticalAlignment=Alignment.CenterVertically) { Checkbox(eqOn,{eqOn=it;try{eq?.enabled=it}catch(_:Exception){}});Text("المعادل الصوتي") }
+                                val names=listOf("منخفض","منخفض متوسط","متوسط","مرتفع متوسط","مرتفع")
+                                names.forEachIndexed { index,n ->
+                                    Text("$n • ${bands[index].toInt()} dB")
+                                    Slider(value=bands[index],onValueChange={v->bands=bands.toMutableList().also{it[index]=v};try{eq?.setBandLevel(index.toShort(),(v*100).toInt().toShort())}catch(_:Exception){}},valueRange=-15f..15f)
+                                }
+                                Text("تعزيز الجهير • ${bass.toInt()}%")
+                                Slider(value=bass,onValueChange={bass=it;try{bassFx?.setStrength((it*1000).toInt().toShort())}catch(_:Exception){}},valueRange=0f..1f)
+                                Text("توسيع الستيريو • ${stereo.toInt()}%")
+                                Slider(value=stereo,onValueChange={stereo=it;try{stereoFx?.setStrength((it*1000).toInt().toShort())}catch(_:Exception){}},valueRange=0f..1f)
+                                Text("قد يختلف دعم مؤثرات الصوت حسب الجهاز.")
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text("تحديد جزء للمعاينة",style=MaterialTheme.typography.titleLarge)
+                                if(duration>0) {
+                                    Text("البداية: ${time(trimStart)}")
+                                    Slider(value=trimStart.toFloat().coerceIn(0f,duration.toFloat()),onValueChange={trimStart=it.toLong().coerceAtMost((trimEnd.takeIf{it>0}?:duration)-1000).coerceAtLeast(0)},valueRange=0f..duration.toFloat())
+                                    Text("النهاية: ${time(trimEnd.takeIf{it>trimStart}?:duration)}")
+                                    Slider(value=(trimEnd.takeIf{it>trimStart}?:duration).toFloat().coerceIn(0f,duration.toFloat()),onValueChange={trimEnd=it.toLong().coerceAtLeast(trimStart+1000).coerceAtMost(duration)},valueRange=0f..duration.toFloat())
+                                    Row(verticalAlignment=Alignment.CenterVertically) { Checkbox(trimPreview,{trimPreview=it;if(it&&trimEnd<=trimStart)trimEnd=duration});Text("تفعيل معاينة النطاق") }
+                                    OutlinedButton(onClick={player.seekTo(trimStart);player.play()},enabled=trimEnd>trimStart) { Text("معاينة الجزء") }
+                                    Text("القص والتصدير النهائي لم يُنفّذا بعد.",style=MaterialTheme.typography.bodySmall)
+                                } else Text("اختر ملفًا أولًا")
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text("ميزات قيد التطوير",style=MaterialTheme.typography.titleLarge)
+                                Text("فصل المسارات محليًا • BPM • تصدير ودمج • موجة الصوت")
+                                Text("لا يوجد رفع للملفات أو إعلانات أو تحليلات.",style=MaterialTheme.typography.bodySmall)
+                            }
                         }
                     }
                 }
             }
         }
-        Spacer(Modifier.height(18.dp)); Text("SonicDemixer • معالجة على جهازك بعد تنزيل النموذج",color=ComposeColor(0xFF667085),fontSize=12.sp)
     }
+}
+
+internal fun time(ms:Long):String {
+    if(ms<0)return "00:00"
+    val s=ms/1000
+    return "%02d:%02d".format(s/60,s%60)
 }
