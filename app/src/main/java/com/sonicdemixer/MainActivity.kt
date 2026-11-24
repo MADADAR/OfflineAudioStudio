@@ -6,10 +6,24 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.graphics.Color
-import android.view.Gravity
-import android.widget.*
 import android.media.MediaPlayer
+import android.graphics.Color
+import android.widget.Toast
+import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -17,148 +31,96 @@ class MainActivity : Activity() {
     private val executor = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private lateinit var engine: DemucsEngine
-    private lateinit var status: TextView
-    private lateinit var progress: ProgressBar
-    private lateinit var download: Button
-    private lateinit var choose: Button
-    private lateinit var separate: Button
-    private lateinit var resultBox: LinearLayout
-    private var selected: Uri? = null
     private var player: MediaPlayer? = null
-    private var playingFile: File? = null
     private var pendingExport: File? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         engine = DemucsEngine(this)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(24, 28, 24, 24)
-            setBackgroundColor(Color.rgb(15, 23, 42))
+        setContent { SonicDemixerUi(
+            modelReady = engine.isModelReady(),
+            onDownload = { progress ->
+                executor.execute { try {
+                    engine.downloadModel { p -> main.post { progress(p) } }
+                    main.post { progress(100) }
+                } catch(e: Exception) { main.post { progress(-1) } } }
+            },
+            onSeparate = { uri, callback ->
+                executor.execute { try {
+                    val result=engine.separateWav(uri) { p -> main.post { callback(p,null) } }
+                    main.post { callback(100,result) }
+                } catch(e: Exception) { main.post { callback(-1,null) } } }
+            },
+            onPlay = { file -> stopPlayback(); try {
+                player=MediaPlayer().apply { setDataSource(file.absolutePath); setOnCompletionListener { stopPlayback() }; prepare(); start() }
+            } catch(_:Exception) { Toast.makeText(this,"تعذر تشغيل الملف",Toast.LENGTH_SHORT).show() } },
+            onExport = { file -> pendingExport=file; exportLauncher.launch(file.name) }
+        ) }
+    }
+    private val exportLauncher=registerForActivityResult(ActivityResultContracts.CreateDocument("audio/wav")) { uri ->
+        val file=pendingExport; pendingExport=null
+        if(uri!=null && file!=null) executor.execute {
+            try { contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } } }
+            catch(_:Exception) { main.post { Toast.makeText(this,"فشل الحفظ",Toast.LENGTH_SHORT).show() } }
         }
-        fun label(text: String, size: Float, color: Int) = TextView(this).apply {
-            this.text = text; textSize = size; setTextColor(color)
-            gravity = Gravity.CENTER; setPadding(0, 10, 0, 10)
-        }
-        root.addView(label("SonicDemixer", 28f, Color.WHITE))
-        root.addView(label("فصل صوتي بالذكاء الاصطناعي — معالجة محلية", 16f, Color.LTGRAY))
-        status = label(if (engine.isModelReady()) "النموذج جاهز — يعمل دون إنترنت" else "نزّل النموذج مرة واحدة لتفعيل الفصل Offline", 14f, Color.rgb(125, 211, 252))
-        root.addView(status)
-        progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
-        root.addView(progress, LinearLayout.LayoutParams(-1, 12))
-        download = Button(this).apply { text = "تنزيل نموذج AI" }
-        choose = Button(this).apply { text = "اختيار ملف صوتي" }
-        separate = Button(this).apply { text = "فصل المسارات الأربعة"; isEnabled = engine.isModelReady() }
-        root.addView(download); root.addView(choose); root.addView(separate)
-        root.addView(label("المسارات الناتجة — تشغيل منفصل", 18f, Color.WHITE))
-        resultBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(resultBox)
-        root.addView(label("الملفات الناتجة WAV. اختر حفظ WAV لنقل المسار إلى مكان تختاره.", 12f, Color.LTGRAY))
-        setContentView(ScrollView(this).apply { addView(root) })
-        download.setOnClickListener { downloadModel() }
-        choose.setOnClickListener {
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*"
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    private fun stopPlayback(){ try{player?.stop()}catch(_:Exception){}; try{player?.release()}catch(_:Exception){}; player=null }
+    override fun onDestroy(){ stopPlayback(); executor.shutdownNow(); super.onDestroy() }
+}
+
+@Composable private fun SonicDemixerUi(
+    modelReady:Boolean,
+    onDownload:( (Int)->Unit)->Unit,
+    onSeparate:(Uri,(Int,List<File>?)->Unit)->Unit,
+    onPlay:(File)->Unit,
+    onExport:(File)->Unit
+) {
+    val context= LocalContext.current
+    val purple=ComposeColor(0xFF7C5CFF); val bg=ComposeColor(0xFF0B0D12); val surface=ComposeColor(0xFF141821)
+    var selected by remember { mutableStateOf<Uri?>(null) }
+    var fileName by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var progress by remember { mutableIntStateOf(0) }
+    var status by remember { mutableStateOf(if(modelReady) "النموذج جاهز" else "يلزم تنزيل النموذج مرة واحدة") }
+    var results by remember { mutableStateOf<List<File>>(emptyList()) }
+    val pick=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        selected=uri; fileName=uri?.lastPathSegment?.substringAfterLast('/') ?: ""
+        status=if(uri!=null) "تم اختيار الملف" else "لم يتم اختيار ملف"
+    }
+    Column(Modifier.fillMaxSize().background(bg).verticalScroll(rememberScrollState()).padding(20.dp), horizontalAlignment=Alignment.CenterHorizontally) {
+        Spacer(Modifier.height(14.dp))
+        Text("SonicDemixer",fontSize=30.sp,fontWeight=FontWeight.Bold,color=ComposeColor.White)
+        Text("فصل صوتي بالذكاء الاصطناعي",color=ComposeColor(0xFFAAB3C4),fontSize=15.sp)
+        Spacer(Modifier.height(22.dp))
+        Card(colors=CardDefaults.cardColors(containerColor=surface),shape=RoundedCornerShape(20.dp),modifier=Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp)) {
+                Text("المعالجة المحلية",color=ComposeColor(0xFF45D6B5),fontWeight=FontWeight.Bold)
+                Spacer(Modifier.height(6.dp)); Text(status,color=ComposeColor.White)
+                if(progress>0) { Spacer(Modifier.height(12.dp)); LinearProgressIndicator(progress={progress.coerceAtMost(100)/100f},color=purple,modifier=Modifier.fillMaxWidth()); Text("$progress%",color=ComposeColor.White) }
             }
-            startActivityForResult(intent, 41)
         }
-        separate.setOnClickListener { runSeparation() }
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 41 && resultCode == RESULT_OK) {
-            selected = data?.data
-            status.text = if (selected != null) "تم اختيار الملف. جاهز للفصل." else "لم يتم اختيار ملف"
-        } else if (requestCode == 42 && resultCode == RESULT_OK) {
-            val uri = data?.data; val file = pendingExport
-            if (uri != null && file != null) executor.execute {
-                try { copyToUri(uri, file); main.post { status.text = "تم حفظ الملف خارج التطبيق." } }
-                catch (e: Exception) { main.post { status.text = "فشل الحفظ: ${e.message}" } }
+        Spacer(Modifier.height(16.dp))
+        Button(onClick={ if(!busy){busy=true;progress=0;onDownload { p-> progress=p; if(p<0){status="تعذر تنزيل النموذج";busy=false}else if(p==100){status="النموذج جاهز للعمل محليًا";busy=false} } } },enabled=!busy&&!modelReady,modifier=Modifier.fillMaxWidth().height(54.dp),colors=ButtonDefaults.buttonColors(containerColor=purple)) { Text(if(modelReady)"النموذج مثبت" else "تنزيل نموذج الذكاء الاصطناعي") }
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(onClick={pick.launch(arrayOf("audio/*"))},enabled=!busy,modifier=Modifier.fillMaxWidth().height(54.dp)) { Text("اختيار ملف صوتي") }
+        if(fileName.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text(fileName,color=ComposeColor(0xFFAAB3C4)) }
+        Spacer(Modifier.height(14.dp))
+        Button(onClick={ val u=selected; if(u==null) status="اختر ملفًا صوتيًا أولًا" else if(!modelReady) status="نزّل النموذج أولًا" else {busy=true;progress=0;status="جار فصل الصوت...";onSeparate(u){p,files-> if(p<0){status="تعذر الفصل";busy=false}else if(files!=null){results=files;status="اكتمل الفصل";busy=false}else progress=p}} },enabled=!busy&&modelReady&&selected!=null,modifier=Modifier.fillMaxWidth().height(58.dp),colors=ButtonDefaults.buttonColors(containerColor=ComposeColor(0xFF45D6B5),contentColor=bg)) { Text("فصل المسارات الصوتية",fontWeight=FontWeight.Bold) }
+        Spacer(Modifier.height(24.dp))
+        if(results.isNotEmpty()) {
+            Text("المسارات الناتجة",color=ComposeColor.White,fontSize=20.sp,fontWeight=FontWeight.Bold)
+            results.forEach { file ->
+                Card(colors=CardDefaults.cardColors(containerColor=surface),modifier=Modifier.fillMaxWidth().padding(vertical=6.dp),shape=RoundedCornerShape(16.dp)) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(file.nameWithoutExtension.replaceFirstChar{it.uppercase()},color=ComposeColor.White,fontWeight=FontWeight.Bold)
+                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.fillMaxWidth().padding(top=10.dp)) {
+                            OutlinedButton(onClick={onPlay(file)},modifier=Modifier.weight(1f)){Text("▶ تشغيل")}
+                            Button(onClick={onExport(file),modifier=Modifier.weight(1f),colors=ButtonDefaults.buttonColors(containerColor=purple)){Text("حفظ WAV")}
+                        }
+                    }
+                }
             }
-            pendingExport = null
         }
+        Spacer(Modifier.height(18.dp)); Text("SonicDemixer • معالجة على جهازك بعد تنزيل النموذج",color=ComposeColor(0xFF667085),fontSize=12.sp)
     }
-
-    private fun downloadModel() {
-        setBusy(true); status.text = "جار تنزيل نموذج الفصل..."
-        executor.execute {
-            try {
-                engine.downloadModel { p -> main.post { progress.progress = p; status.text = "تنزيل النموذج: $p%" } }
-                main.post { status.text = "اكتمل تنزيل النموذج. يمكنك العمل Offline."; separate.isEnabled = true; setBusy(false) }
-            } catch (e: Exception) { main.post { status.text = "فشل التنزيل: ${e.message}"; setBusy(false) } }
-        }
-    }
-
-    private fun runSeparation() {
-        val uri = selected
-        if (uri == null) { status.text = "اختر ملفًا صوتيًا أولًا"; return }
-        if (!engine.isModelReady()) { status.text = "نزّل النموذج أولًا"; return }
-        stopPlayback()
-        setBusy(true); progress.progress = 0; status.text = "جار تجهيز الصوت..."
-        executor.execute {
-            try {
-                val files = engine.separateWav(uri) { p -> main.post { progress.progress = p; status.text = "الفصل: $p%" } }
-                main.post { showResults(files); status.text = "اكتمل الفصل وحُفظت المسارات بصيغة WAV."; setBusy(false) }
-            } catch (e: Exception) { main.post { status.text = "تعذر الفصل: ${e.message}"; setBusy(false) } }
-        }
-    }
-
-    private fun showResults(files: List<File>) {
-        resultBox.removeAllViews()
-        files.forEach { file ->
-            val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0,8,0,8) }
-            val name = TextView(this).apply { text = file.nameWithoutExtension.replaceFirstChar { it.uppercase() }; textSize = 16f; setTextColor(Color.WHITE) }
-            val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            val play = Button(this).apply { text = "▶ تشغيل" }
-            val stop = Button(this).apply { text = "■ إيقاف" }
-            val save = Button(this).apply { text = "حفظ WAV" }
-            play.setOnClickListener { playFile(file) }
-            stop.setOnClickListener { if (playingFile == file) stopPlayback() }
-            save.setOnClickListener { exportFile(file) }
-            controls.addView(play); controls.addView(stop); controls.addView(save)
-            row.addView(name); row.addView(controls)
-            resultBox.addView(row)
-        }
-    }
-
-    private fun playFile(file: File) {
-        stopPlayback()
-        try {
-            player = MediaPlayer().apply {
-                setDataSource(file.absolutePath)
-                setOnCompletionListener { stopPlayback() }
-                setOnErrorListener { _, _, _ -> stopPlayback(); status.text = "تعذر تشغيل المسار"; true }
-                prepare(); start()
-            }
-            playingFile = file; status.text = "تشغيل: ${file.name}"
-        } catch (e: Exception) { status.text = "خطأ في التشغيل: ${e.message}" }
-    }
-
-    private fun stopPlayback() {
-        try { player?.stop() } catch (_: Exception) {}
-        try { player?.release() } catch (_: Exception) {}
-        player = null; playingFile = null
-    }
-
-    private fun exportFile(file: File) {
-        pendingExport = file
-        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE); type = "audio/wav"
-            putExtra(Intent.EXTRA_TITLE, file.name)
-        }
-        startActivityForResult(intent, 42)
-    }
-
-    private fun copyToUri(uri: Uri, file: File) {
-        contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
-    }
-
-    private fun setBusy(busy: Boolean) {
-        download.isEnabled = !busy; choose.isEnabled = !busy
-        separate.isEnabled = !busy && engine.isModelReady()
-    }
-    override fun onDestroy() { stopPlayback(); executor.shutdownNow(); super.onDestroy() }
 }
