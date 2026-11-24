@@ -1,9 +1,11 @@
 # SonicDemixer
+Arabic-first offline Android audio studio prototype (Kotlin/Jetpack Compose).
 
-Android app scaffold for offline audio stem separation, using Kotlin and ONNX Runtime on Android.
+Implemented in this milestone:
+- Local audio file picker and ExoPlayer playback.
+- Seeking, playback speed, and playback controls.
+- Android Equalizer, BassBoost, and Virtualizer APIs with device support caveats.
+- Trim-range selection and preview (not yet destructive export).
+- Arabic RTL UI. No ads, analytics, or file uploads.
 
-- Select WAV PCM 16-bit stereo audio (currently requires 44.1 kHz).
-- HT-Demucs ONNX model is downloaded once, then inference is intended to run locally.
-- The debug APK build workflow runs on pushes to `main` and uploads the APK as a workflow artifact.
-
-**Status:** source code and CI build are present, but runtime model compatibility and separation quality have not yet been verified on a device.
+Not yet implemented: AI stem separation, waveform, BPM/key analysis, actual trim/export, merging, and additional effects. The debug build is an unverified development build until CI successfully produces and is inspected.
