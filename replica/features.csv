@@ -1,0 +1,25 @@
+feature,area,priority,original,clone,notes
+Import local audio,Import,must,Yes,no,Android system picker; MP3/WAV first.
+Validate media and show metadata,Import,must,Yes,no,Detect duration codec channels and actionable errors.
+Convert unsupported input internally,Import,must,Partial / format-dependent,no,Decode or convert locally; no manual conversion.
+Two-/four-stem separation,AI/DSP,must,Yes,no,Real model inference required; UI mock is not completion.
+Local/offline inference,AI/DSP,must,Not established as equivalent,no,Core differentiator; model licence and device feasibility gate.
+Processing progress and cancellation,AI/DSP,must,Yes,no,Persist job state and clean temporary files safely.
+Synchronized stem playback,Mixer,must,Yes,no,One shared sample clock; aligned stems.
+Mute / solo,Mixer,must,Yes,no,Define multiple-solo behavior.
+Per-stem volume,Mixer,must,Yes,no,Non-destructive gain.
+Master playback and seek,Mixer,must,Yes,no,Handle audio focus and route changes.
+Export individual stem,Export,must,Yes,no,WAV first; MP3 after encoder licence review.
+Export all stems,Export,must,Yes,no,Preserve alignment and deterministic names.
+Export custom mix,Export,should,Yes,no,Render selected stems with clipping protection.
+Project library and reopen,Library,must,Yes,no,Persist metadata and paths.
+Rename / delete project,Library,should,Yes,no,Confirm deletion and clean app-managed files.
+Waveform display,Mixer,should,Likely,no,Verify exact reference behavior; secondary to audio correctness.
+Pitch / speed controls,Practice,could,Yes,no,Later phase.
+BPM / key / chord detection,Practice,could,Yes,no,Separate model/DSP scope.
+Lyrics transcription,Practice,could,Yes,no,Language/model accuracy needs separate study.
+Cloud import / sync,Integrations,skip,Yes,no,Cloud services excluded from offline MVP.
+Collaboration / shared sessions,Integrations,skip,Yes (broader product),no,Network and identity infrastructure excluded.
+Licensed catalogue / hosted content,Content,skip,Yes (where offered),no,Do not copy catalogue or user data.
+Account / subscription / plan gating,Commercial,skip,Yes,no,Target is free with no ads/subscriptions.
+Hi-Fi / 27+ stem parity,AI/DSP,could,Advertised,no,Not promised; depends on model, compute and licence.
