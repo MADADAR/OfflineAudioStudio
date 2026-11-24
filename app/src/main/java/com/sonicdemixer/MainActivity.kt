@@ -1,6 +1,6 @@
 package com.sonicdemixer
 
-import android.app.Activity
+import androidx.activity.ComponentActivity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -27,7 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import java.io.File
 import java.util.concurrent.Executors
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
     private val executor = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private lateinit var engine: DemucsEngine
@@ -76,6 +76,7 @@ class MainActivity : Activity() {
     onExport:(File)->Unit
 ) {
     val context= LocalContext.current
+    var modelIsReady by remember { mutableStateOf(modelReady) }
     val purple=ComposeColor(0xFF7C5CFF); val bg=ComposeColor(0xFF0B0D12); val surface=ComposeColor(0xFF141821)
     var selected by remember { mutableStateOf<Uri?>(null) }
     var fileName by remember { mutableStateOf("") }
@@ -100,12 +101,12 @@ class MainActivity : Activity() {
             }
         }
         Spacer(Modifier.height(16.dp))
-        Button(onClick={ if(!busy){busy=true;progress=0;onDownload { p-> progress=p; if(p<0){status="تعذر تنزيل النموذج";busy=false}else if(p==100){status="النموذج جاهز للعمل محليًا";busy=false} } } },enabled=!busy&&!modelReady,modifier=Modifier.fillMaxWidth().height(54.dp),colors=ButtonDefaults.buttonColors(containerColor=purple)) { Text(if(modelReady)"النموذج مثبت" else "تنزيل نموذج الذكاء الاصطناعي") }
+        Button(onClick={ if(!busy){busy=true;progress=0;onDownload { p-> progress=p; if(p<0){status="تعذر تنزيل النموذج";busy=false}else if(p==100){modelIsReady=true;status="النموذج جاهز للعمل محليًا";busy=false} } } },enabled=!busy&&!modelIsReady,modifier=Modifier.fillMaxWidth().height(54.dp),colors=ButtonDefaults.buttonColors(containerColor=purple)) { Text(if(modelIsReady)"النموذج مثبت" else "تنزيل نموذج الذكاء الاصطناعي") }
         Spacer(Modifier.height(10.dp))
         OutlinedButton(onClick={pick.launch(arrayOf("audio/*"))},enabled=!busy,modifier=Modifier.fillMaxWidth().height(54.dp)) { Text("اختيار ملف صوتي") }
         if(fileName.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text(fileName,color=ComposeColor(0xFFAAB3C4)) }
         Spacer(Modifier.height(14.dp))
-        Button(onClick={ val u=selected; if(u==null) status="اختر ملفًا صوتيًا أولًا" else if(!modelReady) status="نزّل النموذج أولًا" else {busy=true;progress=0;status="جار فصل الصوت...";onSeparate(u){p,files-> if(p<0){status="تعذر الفصل";busy=false}else if(files!=null){results=files;status="اكتمل الفصل";busy=false}else progress=p}} },enabled=!busy&&modelReady&&selected!=null,modifier=Modifier.fillMaxWidth().height(58.dp),colors=ButtonDefaults.buttonColors(containerColor=ComposeColor(0xFF45D6B5),contentColor=bg)) { Text("فصل المسارات الصوتية",fontWeight=FontWeight.Bold) }
+        Button(onClick={ val u=selected; if(u==null) status="اختر ملفًا صوتيًا أولًا" else if(!modelIsReady) status="نزّل النموذج أولًا" else {busy=true;progress=0;status="جار فصل الصوت...";onSeparate(u){p,files-> if(p<0){status="تعذر الفصل";busy=false}else if(files!=null){results=files;status="اكتمل الفصل";busy=false}else progress=p}} },enabled=!busy&&modelIsReady&&selected!=null,modifier=Modifier.fillMaxWidth().height(58.dp),colors=ButtonDefaults.buttonColors(containerColor=ComposeColor(0xFF45D6B5),contentColor=bg)) { Text("فصل المسارات الصوتية",fontWeight=FontWeight.Bold) }
         Spacer(Modifier.height(24.dp))
         if(results.isNotEmpty()) {
             Text("المسارات الناتجة",color=ComposeColor.White,fontSize=20.sp,fontWeight=FontWeight.Bold)
