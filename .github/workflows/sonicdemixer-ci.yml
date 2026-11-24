@@ -23,6 +23,15 @@ jobs:
           echo "/tmp/gradle-8.13/bin" >> "$GITHUB_PATH"
       - name: Assemble debug APK
         run: gradle assembleDebug --stacktrace
+      - name: Verify APK signature and package metadata
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n 1)
+          test -n "$APKSIGNER"
+          test -n "$AAPT"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          "$AAPT" dump badging "$APK"
       - uses: actions/upload-artifact@v4
         with:
           name: SonicDemixer-debug-apk
