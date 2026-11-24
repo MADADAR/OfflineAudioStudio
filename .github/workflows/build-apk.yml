@@ -42,13 +42,33 @@ jobs:
       - name: Run audio quality unit tests
         run: gradle testDebugUnitTest --stacktrace
 
-      - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+      - name: Create one-time release signing key
+        shell: bash
+        run: |
+          STORE_PASSWORD="$(openssl rand -hex 24)"
+          KEY_PASSWORD="$(openssl rand -hex 24)"
+          keytool -genkeypair -v \
+            -keystore "$RUNNER_TEMP/sonicdemixer-release.jks" \
+            -storetype JKS \
+            -storepass "$STORE_PASSWORD" \
+            -keypass "$KEY_PASSWORD" \
+            -alias sonicdemixer \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=SonicDemixer, OU=Android, O=OfflineAudioStudio, L=Unknown, ST=Unknown, C=CA"
+          {
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/sonicdemixer-release.jks"
+            echo "ANDROID_KEYSTORE_PASSWORD=$STORE_PASSWORD"
+            echo "ANDROID_KEY_ALIAS=sonicdemixer"
+            echo "ANDROID_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
 
-      - name: Upload APK
+      - name: Build signed release APK
+        run: gradle assembleRelease --stacktrace
+
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
-          name: OfflineAudioStudio-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: SonicDemixer-release-apk
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14
